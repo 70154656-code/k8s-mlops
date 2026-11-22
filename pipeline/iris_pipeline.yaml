@@ -1,0 +1,233 @@
+# PIPELINE DEFINITION
+# Name: iris-classification-pipeline
+# Inputs:
+#    n_estimators: int [Default: 100.0]
+components:
+  comp-evaluate-model:
+    executorLabel: exec-evaluate-model
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        test_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+  comp-load-and-preprocess:
+    executorLabel: exec-load-and-preprocess
+    outputDefinitions:
+      artifacts:
+        test_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        train_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      artifacts:
+        train_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        n_estimators:
+          defaultValue: 100.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-evaluate-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.5.2'\
+          \ 'pandas==2.2.3'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.18.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate_model(\n    test_data: Input[Dataset],\n    model: Input[Model],\n\
+          \    metrics: Output[Metrics],\n):\n    \"\"\"Component C: evaluate the\
+          \ trained model on the held-out test set.\"\"\"\n    import joblib\n   \
+          \ import pandas as pd\n    from sklearn.metrics import accuracy_score, f1_score,\
+          \ precision_score, recall_score\n\n    df = pd.read_csv(test_data.path)\n\
+          \    X, y = df.drop(columns=[\"target\"]), df[\"target\"]\n    clf = joblib.load(model.path)\n\
+          \    pred = clf.predict(X)\n    metrics.log_metric(\"accuracy\", float(accuracy_score(y,\
+          \ pred)))\n    metrics.log_metric(\"precision_macro\", float(precision_score(y,\
+          \ pred, average=\"macro\")))\n    metrics.log_metric(\"recall_macro\", float(recall_score(y,\
+          \ pred, average=\"macro\")))\n    metrics.log_metric(\"f1_macro\", float(f1_score(y,\
+          \ pred, average=\"macro\")))\n\n"
+        image: python:3.11-slim
+    exec-load-and-preprocess:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_and_preprocess
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.5.2'\
+          \ 'pandas==2.2.3'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.18.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_and_preprocess(train_data: Output[Dataset], test_data: Output[Dataset]):\n\
+          \    \"\"\"Component A: load Iris, clean it, split into train/test.\"\"\"\
+          \n    from sklearn.datasets import load_iris\n    from sklearn.model_selection\
+          \ import train_test_split\n\n    iris = load_iris(as_frame=True)\n    df\
+          \ = iris.frame.drop_duplicates().dropna()\n    train, test = train_test_split(\n\
+          \        df, test_size=0.2, random_state=42, stratify=df[\"target\"]\n \
+          \   )\n    train.to_csv(train_data.path, index=False)\n    test.to_csv(test_data.path,\
+          \ index=False)\n    print(f\"rows: train={len(train)} test={len(test)}\"\
+          )\n\n"
+        image: python:3.11-slim
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'scikit-learn==1.5.2'\
+          \ 'pandas==2.2.3'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.18.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_model(\n    train_data: Input[Dataset],\n    model: Output[Model],\n\
+          \    metrics: Output[Metrics],\n    n_estimators: int = 100,\n):\n    \"\
+          \"\"Component B: train a scaler + random forest, save the model file.\"\"\
+          \"\n    import joblib\n    import pandas as pd\n    from sklearn.ensemble\
+          \ import RandomForestClassifier\n    from sklearn.pipeline import make_pipeline\n\
+          \    from sklearn.preprocessing import StandardScaler\n\n    df = pd.read_csv(train_data.path)\n\
+          \    X, y = df.drop(columns=[\"target\"]), df[\"target\"]\n    clf = make_pipeline(\n\
+          \        StandardScaler(),\n        RandomForestClassifier(n_estimators=n_estimators,\
+          \ random_state=42),\n    )\n    clf.fit(X, y)\n    metrics.log_metric(\"\
+          train_accuracy\", float(clf.score(X, y)))\n    joblib.dump(clf, model.path)\n\
+          \n"
+        image: python:3.11-slim
+pipelineInfo:
+  name: iris-classification-pipeline
+root:
+  dag:
+    tasks:
+      evaluate-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate-model
+        dependentTasks:
+        - load-and-preprocess
+        - train-model
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-model
+            test_data:
+              taskOutputArtifact:
+                outputArtifactKey: test_data
+                producerTask: load-and-preprocess
+        taskInfo:
+          name: evaluate-model
+      load-and-preprocess:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-and-preprocess
+        taskInfo:
+          name: load-and-preprocess
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - load-and-preprocess
+        inputs:
+          artifacts:
+            train_data:
+              taskOutputArtifact:
+                outputArtifactKey: train_data
+                producerTask: load-and-preprocess
+          parameters:
+            n_estimators:
+              componentInputParameter: n_estimators
+        taskInfo:
+          name: train-model
+  inputDefinitions:
+    parameters:
+      n_estimators:
+        defaultValue: 100.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.18.1
