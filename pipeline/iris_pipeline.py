@@ -2,7 +2,11 @@ from kfp import dsl, compiler
 from kfp.dsl import Input, Output, Dataset, Model, Metrics
 
 BASE = "python:3.11-slim"
-PKGS = ["scikit-learn==1.5.2", "pandas==2.2.3"]
+PKGS = [
+    "--default-timeout=600",
+    "scikit-learn==1.5.2",
+    "pandas==2.2.3",
+]
 
 
 @dsl.component(base_image=BASE, packages_to_install=PKGS)
@@ -81,3 +85,8 @@ def iris_pipeline(n_estimators: int = 100):
 if __name__ == "__main__":
     compiler.Compiler().compile(iris_pipeline, "iris_pipeline.yaml")
     print("compiled to iris_pipeline.yaml")
+PKGS = [
+    "--default-timeout=600",
+    "scikit-learn==1.5.2",
+    "pandas==2.2.3",
+]
