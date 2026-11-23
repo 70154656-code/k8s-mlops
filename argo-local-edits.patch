@@ -1,0 +1,51 @@
+diff --git a/manifests/kustomize/third-party/argo/base/kustomization.yaml b/manifests/kustomize/third-party/argo/base/kustomization.yaml
+index c041d94..b739f5f 100644
+--- a/manifests/kustomize/third-party/argo/base/kustomization.yaml
++++ b/manifests/kustomize/third-party/argo/base/kustomization.yaml
+@@ -2,7 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
+ kind: Kustomization
+ 
+ resources:
+-- https://github.com/argoproj/argo-workflows/manifests/base/workflow-controller?ref=v4.0.5&timeout=60s
++- ../../../../../../argo-src/manifests/base/workflow-controller
+ 
+ patches:
+ - path: workflow-controller-deployment-patch.yaml
+diff --git a/manifests/kustomize/third-party/argo/installs/cluster/kustomization.yaml b/manifests/kustomize/third-party/argo/installs/cluster/kustomization.yaml
+index 2e749b3..60f623f 100644
+--- a/manifests/kustomize/third-party/argo/installs/cluster/kustomization.yaml
++++ b/manifests/kustomize/third-party/argo/installs/cluster/kustomization.yaml
+@@ -2,8 +2,8 @@ apiVersion: kustomize.config.k8s.io/v1beta1
+ kind: Kustomization
+ 
+ resources:
+-- https://github.com/argoproj/argo-workflows/manifests/base/crds/minimal?ref=v4.0.5
+-- https://github.com/argoproj/argo-workflows/manifests/cluster-install-no-crds/workflow-controller-rbac?ref=v4.0.5
++- ../../../../../../../argo-src/manifests/base/crds/minimal
++- ../../../../../../../argo-src/manifests/cluster-install-no-crds/workflow-controller-rbac
+ - ../../base
+ 
+ patches:
+diff --git a/manifests/kustomize/third-party/argo/installs/namespace/cluster-scoped/kustomization.yaml b/manifests/kustomize/third-party/argo/installs/namespace/cluster-scoped/kustomization.yaml
+index 1b90171..8a3a4c3 100644
+--- a/manifests/kustomize/third-party/argo/installs/namespace/cluster-scoped/kustomization.yaml
++++ b/manifests/kustomize/third-party/argo/installs/namespace/cluster-scoped/kustomization.yaml
+@@ -2,4 +2,4 @@ apiVersion: kustomize.config.k8s.io/v1beta1
+ kind: Kustomization
+ resources:
+ # Minimal CRDs omit schema validation, recommended for production cluster.
+-- https://github.com/argoproj/argo-workflows/manifests/base/crds/minimal?ref=v4.0.5
++- ../../../../../../../../argo-src/manifests/base/crds/minimal
+diff --git a/manifests/kustomize/third-party/argo/installs/namespace/kustomization.yaml b/manifests/kustomize/third-party/argo/installs/namespace/kustomization.yaml
+index 950a050..b5f620f 100644
+--- a/manifests/kustomize/third-party/argo/installs/namespace/kustomization.yaml
++++ b/manifests/kustomize/third-party/argo/installs/namespace/kustomization.yaml
+@@ -10,7 +10,7 @@ namespace: kubeflow
+ 
+ resources:
+ - ../../base
+-- https://github.com/argoproj/argo-workflows/manifests/namespace-install/workflow-controller-rbac?ref=v4.0.5
++- ../../../../../../../argo-src/manifests/namespace-install/workflow-controller-rbac
+ patches:
+ - path: workflow-controller-deployment-patch.json
+   target:

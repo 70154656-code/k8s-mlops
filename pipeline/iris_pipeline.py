@@ -1,9 +1,17 @@
-from kfp import dsl, compiler
-from kfp.dsl import Input, Output, Dataset, Model, Metrics
+import os
+from kfp import compiler, dsl
+from kfp.dsl import Dataset, Input, Metrics, Model, Output
 
 BASE = "python:3.11-slim"
 PKGS = [
     "--default-timeout=600",
+    "scikit-learn==1.5.2",
+    "pandas==2.2.3",
+]
+MLFLOW_PKGS = [
+    "--default-timeout=600",
+    "mlflow==2.17.2",
+    "sqlalchemy==2.0.36",
     "scikit-learn==1.5.2",
     "pandas==2.2.3",
 ]
@@ -71,8 +79,55 @@ def evaluate_model(
     metrics.log_metric("f1_macro", float(f1_score(y, pred, average="macro")))
 
 
+@dsl.component(base_image=BASE, packages_to_install=MLFLOW_PKGS)
+def register_model_in_mlflow(
+    train_data: Input[Dataset],
+    model: Input[Model],
+    tracking_uri: str = "http://mlflow.mlops.svc.cluster.local:5000",
+    registered_model_name: str = "iris-randomforest",
+    alias: str = "production",
+):
+    """Component D: log model & metrics to MLflow and assign @production alias."""
+    import joblib
+    import mlflow
+    import mlflow.sklearn
+    import pandas as pd
+    from mlflow.tracking import MlflowClient
+
+    mlflow.set_tracking_uri(tracking_uri)
+    mlflow.set_experiment("iris-classification")
+
+    clf = joblib.load(model.path)
+    sample_df = pd.read_csv(train_data.path).drop(columns=["target"]).head(5)
+
+    with mlflow.start_run(run_name="iris-rf-pipeline") as run:
+        mlflow.log_param("model_type", "StandardScaler+RandomForestClassifier")
+        model_info = mlflow.sklearn.log_model(
+            sk_model=clf,
+            artifact_path="model",
+            registered_model_name=registered_model_name,
+            input_example=sample_df,
+        )
+        client = MlflowClient(tracking_uri=tracking_uri)
+        version = model_info.registered_model_version
+        client.set_registered_model_alias(
+            name=registered_model_name,
+            alias=alias,
+            version=version,
+        )
+        print(
+            f"Logged run={run.info.run_id}, registered {registered_model_name} "
+            f"v{version} with alias @{alias}"
+        )
+
+
 @dsl.pipeline(name="iris-classification-pipeline")
-def iris_pipeline(n_estimators: int = 100):
+def iris_pipeline(
+    n_estimators: int = 100,
+    mlflow_tracking_uri: str = "http://mlflow.mlops.svc.cluster.local:5000",
+    registered_model_name: str = "iris-randomforest",
+    alias: str = "production",
+):
     prep = load_and_preprocess()
     train = train_model(
         train_data=prep.outputs["train_data"], n_estimators=n_estimators
@@ -80,13 +135,15 @@ def iris_pipeline(n_estimators: int = 100):
     evaluate_model(
         test_data=prep.outputs["test_data"], model=train.outputs["model"]
     )
+    register_model_in_mlflow(
+        train_data=prep.outputs["train_data"],
+        model=train.outputs["model"],
+        tracking_uri=mlflow_tracking_uri,
+        registered_model_name=registered_model_name,
+        alias=alias,
+    )
 
 
 if __name__ == "__main__":
     compiler.Compiler().compile(iris_pipeline, "iris_pipeline.yaml")
     print("compiled to iris_pipeline.yaml")
-PKGS = [
-    "--default-timeout=600",
-    "scikit-learn==1.5.2",
-    "pandas==2.2.3",
-]

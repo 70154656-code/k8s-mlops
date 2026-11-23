@@ -1,0 +1,152 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+    }
+
+    stages {
+        stage('Workspace & Python Env') {
+            steps {
+                sh '''
+                    cd /home/raja_ehtasham/k8s-mlops/pipeline
+                    pwd
+                    ls -la iris_pipeline.py
+                    if [ -d .venv ]; then
+                        . .venv/bin/activate
+                    fi
+                    python3 --version
+                '''
+            }
+        }
+
+        stage('Compile KFP Pipeline') {
+            steps {
+                sh '''
+                    cd /home/raja_ehtasham/k8s-mlops/pipeline
+                    if [ -d .venv ]; then
+                        . .venv/bin/activate
+                    fi
+                    python3 iris_pipeline.py
+                    ls -lh iris_pipeline.yaml
+                '''
+            }
+        }
+
+        stage('Run Pipeline Steps & Metrics') {
+            steps {
+                sh '''
+                    cd /home/raja_ehtasham/k8s-mlops/pipeline
+                    if [ -d .venv ]; then
+                        . .venv/bin/activate
+                    fi
+                    python3 -c "
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import json, os
+
+os.makedirs('/tmp/jenkins_iris_run', exist_ok=True)
+X, y = load_iris(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+clf = RandomForestClassifier(n_estimators=100, random_state=42)
+clf.fit(X_train, y_train)
+preds = clf.predict(X_test)
+
+metrics = {
+    'train_accuracy': float(accuracy_score(y_train, clf.predict(X_train))),
+    'accuracy': float(accuracy_score(y_test, preds)),
+    'precision_macro': float(precision_score(y_test, preds, average='macro')),
+    'recall_macro': float(recall_score(y_test, preds, average='macro')),
+    'f1_macro': float(f1_score(y_test, preds, average='macro'))
+}
+with open('/tmp/jenkins_iris_run/metrics.json', 'w') as f:
+    json.dump(metrics, f, indent=2)
+print('METRICS:', json.dumps(metrics, indent=2))
+"
+                '''
+            }
+        }
+
+        stage('Log Metrics to MLflow') {
+            steps {
+                sh '''
+                    cd /home/raja_ehtasham/k8s-mlops/pipeline
+                    if [ -d .venv ]; then
+                        . .venv/bin/activate
+                    fi
+
+                    export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-http://127.0.0.1:5000}"
+                    export OUT_DIR="/tmp/mlflow_jenkins_${BUILD_NUMBER:-run}"
+
+                    python3 -c '
+import os, json
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
+out_dir = os.environ["OUT_DIR"]
+os.makedirs(out_dir, exist_ok=True)
+
+X, y = load_iris(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+n_estimators = 100
+clf = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+clf.fit(X_train, y_train)
+preds = clf.predict(X_test)
+
+metrics = {
+    "train_accuracy": float(accuracy_score(y_train, clf.predict(X_train))),
+    "accuracy": float(accuracy_score(y_test, preds)),
+    "precision_macro": float(precision_score(y_test, preds, average="macro")),
+    "recall_macro": float(recall_score(y_test, preds, average="macro")),
+    "f1_macro": float(f1_score(y_test, preds, average="macro")),
+}
+
+metrics_path = os.path.join(out_dir, "metrics.json")
+with open(metrics_path, "w") as f:
+    json.dump(metrics, f, indent=2)
+
+print("Saved metrics to", metrics_path)
+
+try:
+    import mlflow
+    mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+    mlflow.set_experiment("iris-jenkins-mlops")
+    run_name = "jenkins-build-" + os.environ.get("BUILD_NUMBER", "local")
+    with mlflow.start_run(run_name=run_name):
+        mlflow.log_param("n_estimators", n_estimators)
+        mlflow.log_param("test_size", 0.2)
+        mlflow.log_metrics(metrics)
+    print("Logged to MLflow at:", os.environ["MLFLOW_TRACKING_URI"])
+except Exception as e:
+    print("MLflow logging skipped/fallback:", e)
+'
+                '''
+            }
+        }
+
+        stage('Verify mlops Namespace (Read-Only)') {
+            steps {
+                sh '''
+                    export KUBECONFIG=/home/raja_ehtasham/.kube/config
+                    kubectl config current-context || true
+                    kubectl get pods -n mlops || true
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            archiveArtifacts artifacts: '**/iris_pipeline.yaml', allowEmptyArchive: true
+            echo 'Jenkins Iris MLOps pipeline completed successfully!'
+        }
+    }
+}

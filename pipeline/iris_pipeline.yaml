@@ -1,7 +1,10 @@
 # PIPELINE DEFINITION
 # Name: iris-classification-pipeline
 # Inputs:
+#    alias: str [Default: 'production']
+#    mlflow_tracking_uri: str [Default: 'http://mlflow.mlops.svc.cluster.local:5000']
 #    n_estimators: int [Default: 100.0]
+#    registered_model_name: str [Default: 'iris-randomforest']
 components:
   comp-evaluate-model:
     executorLabel: exec-evaluate-model
@@ -33,6 +36,31 @@ components:
           artifactType:
             schemaTitle: system.Dataset
             schemaVersion: 0.0.1
+  comp-register-model-in-mlflow:
+    executorLabel: exec-register-model-in-mlflow
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        train_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        alias:
+          defaultValue: production
+          isOptional: true
+          parameterType: STRING
+        registered_model_name:
+          defaultValue: iris-randomforest
+          isOptional: true
+          parameterType: STRING
+        tracking_uri:
+          defaultValue: http://mlflow.mlops.svc.cluster.local:5000
+          isOptional: true
+          parameterType: STRING
   comp-train-model:
     executorLabel: exec-train-model
     inputDefinitions:
@@ -134,6 +162,54 @@ deploymentSpec:
           \ index=False)\n    print(f\"rows: train={len(train)} test={len(test)}\"\
           )\n\n"
         image: python:3.11-slim
+    exec-register-model-in-mlflow:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - register_model_in_mlflow
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location '--default-timeout=600'\
+          \ 'mlflow==2.17.2' 'sqlalchemy==2.0.36' 'scikit-learn==1.5.2' 'pandas==2.2.3'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.18.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef register_model_in_mlflow(\n    train_data: Input[Dataset],\n\
+          \    model: Input[Model],\n    tracking_uri: str = \"http://mlflow.mlops.svc.cluster.local:5000\"\
+          ,\n    registered_model_name: str = \"iris-randomforest\",\n    alias: str\
+          \ = \"production\",\n):\n    \"\"\"Component D: log model & metrics to MLflow\
+          \ and assign @production alias.\"\"\"\n    import joblib\n    import mlflow\n\
+          \    import mlflow.sklearn\n    import pandas as pd\n    from mlflow.tracking\
+          \ import MlflowClient\n\n    mlflow.set_tracking_uri(tracking_uri)\n   \
+          \ mlflow.set_experiment(\"iris-classification\")\n\n    clf = joblib.load(model.path)\n\
+          \    sample_df = pd.read_csv(train_data.path).drop(columns=[\"target\"]).head(5)\n\
+          \n    with mlflow.start_run(run_name=\"iris-rf-pipeline\") as run:\n   \
+          \     mlflow.log_param(\"model_type\", \"StandardScaler+RandomForestClassifier\"\
+          )\n        model_info = mlflow.sklearn.log_model(\n            sk_model=clf,\n\
+          \            artifact_path=\"model\",\n            registered_model_name=registered_model_name,\n\
+          \            input_example=sample_df,\n        )\n        client = MlflowClient(tracking_uri=tracking_uri)\n\
+          \        version = model_info.registered_model_version\n        client.set_registered_model_alias(\n\
+          \            name=registered_model_name,\n            alias=alias,\n   \
+          \         version=version,\n        )\n        print(\n            f\"Logged\
+          \ run={run.info.run_id}, registered {registered_model_name} \"\n       \
+          \     f\"v{version} with alias @{alias}\"\n        )\n\n"
+        image: python:3.11-slim
     exec-train-model:
       container:
         args:
@@ -205,6 +281,33 @@ root:
           name: comp-load-and-preprocess
         taskInfo:
           name: load-and-preprocess
+      register-model-in-mlflow:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-register-model-in-mlflow
+        dependentTasks:
+        - load-and-preprocess
+        - train-model
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-model
+            train_data:
+              taskOutputArtifact:
+                outputArtifactKey: train_data
+                producerTask: load-and-preprocess
+          parameters:
+            alias:
+              componentInputParameter: alias
+            registered_model_name:
+              componentInputParameter: registered_model_name
+            tracking_uri:
+              componentInputParameter: mlflow_tracking_uri
+        taskInfo:
+          name: register-model-in-mlflow
       train-model:
         cachingOptions:
           enableCache: true
@@ -225,9 +328,21 @@ root:
           name: train-model
   inputDefinitions:
     parameters:
+      alias:
+        defaultValue: production
+        isOptional: true
+        parameterType: STRING
+      mlflow_tracking_uri:
+        defaultValue: http://mlflow.mlops.svc.cluster.local:5000
+        isOptional: true
+        parameterType: STRING
       n_estimators:
         defaultValue: 100.0
         isOptional: true
         parameterType: NUMBER_INTEGER
+      registered_model_name:
+        defaultValue: iris-randomforest
+        isOptional: true
+        parameterType: STRING
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.18.1
