@@ -5,6 +5,7 @@ pipeline {
         string(name: 'MODEL_NAME', defaultValue: 'iris-randomforest', description: 'Registered MLflow model name')
         string(name: 'EXPERIMENT_NAME', defaultValue: 'iris-classification', description: 'MLflow experiment name')
         string(name: 'MLFLOW_TRACKING_URI', defaultValue: 'http://localhost:5000', description: 'MLflow tracking URI')
+        string(name: 'MODEL_TAGS', defaultValue: 'pipeline=jenkins,dataset=iris,tuned=true', description: 'Comma-separated key=value tags for the model version')
         string(name: 'K8S_NAMESPACE', defaultValue: 'mlops', description: 'Target Kubernetes namespace')
         string(name: 'K8S_DEPLOYMENT', defaultValue: 'mlflow-model-serving', description: 'Kubernetes serving deployment name')
         booleanParam(name: 'PROMOTE_TO_STAGING', defaultValue: true, description: 'Assign @staging to the newly registered version')
@@ -27,11 +28,12 @@ pipeline {
             }
         }
 
-        stage('Promote Aliases & Rollout') {
+        stage('Tag, Promote & Rollout') {
             steps {
                 sh """
                     MLFLOW_TRACKING_URI="${params.MLFLOW_TRACKING_URI}" \
                     MODEL_NAME="${params.MODEL_NAME}" \
+                    MODEL_TAGS="${params.MODEL_TAGS}" \
                     K8S_NAMESPACE="${params.K8S_NAMESPACE}" \
                     K8S_DEPLOYMENT="${params.K8S_DEPLOYMENT}" \
                     PROMOTE_TO_STAGING="${params.PROMOTE_TO_STAGING}" \
@@ -44,6 +46,7 @@ from mlflow.tracking import MlflowClient
 
 uri = os.environ["MLFLOW_TRACKING_URI"]
 model_name = os.environ["MODEL_NAME"]
+raw_tags = os.environ.get("MODEL_TAGS", "")
 ns = os.environ["K8S_NAMESPACE"]
 deploy = os.environ["K8S_DEPLOYMENT"]
 to_staging = os.environ["PROMOTE_TO_STAGING"].lower() == "true"
@@ -56,7 +59,20 @@ versions = client.search_registered_models(filter_string=f"name = '{model_name}'
 latest_version = max(int(v.version) for v in versions[0].latest_versions) if versions else None
 assert latest_version is not None, f"No versions found for {model_name}"
 
-print(f"Latest registered version for {model_name}: {latest_version}")
+for pair in raw_tags.split(","):
+    pair = pair.strip()
+    if "=" in pair:
+        k, v = pair.split("=", 1)
+        k, v = k.strip(), v.strip()
+        client.set_model_version_tag(name=model_name, version=str(latest_version), key=k, value=v)
+        print(f"Tagged {model_name} v{latest_version}: {k}={v}")
+
+client.set_model_version_tag(
+    name=model_name,
+    version=str(latest_version),
+    key="jenkins_build",
+    value=os.environ.get("BUILD_NUMBER", "local"),
+)
 
 if to_staging:
     client.set_registered_model_alias(name=model_name, alias="staging", version=str(latest_version))
